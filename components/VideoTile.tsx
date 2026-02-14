@@ -58,9 +58,9 @@ const VideoTile: React.FC<VideoTileProps> = ({
 
       {/* Subtle PiP Indicator for screen sharing on local camera tile */}
       {isSelfScreenSharing && !isScreenSharing && (
-        <div className="absolute top-4 left-4 z-40 bg-blue-600/20 backdrop-blur-md px-2 py-1 rounded-lg border border-blue-500/30 flex items-center gap-2 animate-in fade-in duration-500">
-           <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse shadow-[0_0_8px_#3b82f6]"></div>
-           <span className="text-[7px] font-black text-blue-400 uppercase tracking-widest">Live Cam PiP</span>
+        <div className="absolute top-4 left-4 z-40 bg-blue-600/30 backdrop-blur-md px-2 py-1 rounded-lg border border-blue-500/30 flex items-center gap-2 animate-in fade-in duration-500 shadow-lg shadow-blue-500/10">
+           <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse shadow-[0_0_8px_#60a5fa]"></div>
+           <span className="text-[8px] font-black text-blue-200 uppercase tracking-widest">Live Cam PiP</span>
         </div>
       )}
 

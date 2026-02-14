@@ -36,7 +36,6 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({ session, onLeave, onStatusCha
   const handleSignaling = async (msg: SignalPayload) => {
     switch (msg.type) {
       case 'JOIN':
-        // When a new user joins, trigger a peer creation and offer
         createPeer(msg.senderId, msg.senderName || 'Participant', true);
         break;
       case 'OFFER':
@@ -120,20 +119,24 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({ session, onLeave, onStatusCha
 
   const createPeer = (targetId: string, name: string, shouldOffer: boolean) => {
     if (peers.current.has(targetId)) {
-        // Still ensure tracks are added if peer exists but stream changed
         if (localStreamRef.current) peers.current.get(targetId)!.addTracks(localStreamRef.current);
         return peers.current.get(targetId)!;
     }
     
     const peer = new WebRTCService(
-      (stream) => setRemoteStreams(prev => new Map(prev).set(targetId, stream)),
+      (stream) => {
+        setRemoteStreams(prev => new Map(prev).set(targetId, stream));
+      },
       (candidate) => sigService.current.sendSignal({
         type: 'CANDIDATE', senderId: session.userId, senderName: session.displayName,
         roomId: session.roomId, targetId, data: candidate
       })
     );
 
-    if (localStreamRef.current) peer.addTracks(localStreamRef.current);
+    if (localStreamRef.current) {
+        peer.addTracks(localStreamRef.current);
+    }
+    
     peers.current.set(targetId, peer);
     
     setParticipants(prev => {
@@ -155,14 +158,15 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({ session, onLeave, onStatusCha
   const toggleScreenShare = async () => {
     try {
       if (!isScreenSharing) {
-        const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+        const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
         setScreenStream(stream);
         setIsScreenSharing(true);
-        const videoTrack = stream.getVideoTracks()[0];
-        videoTrack.onended = () => stopScreenSharing();
+        const screenVideoTrack = stream.getVideoTracks()[0];
+        
+        screenVideoTrack.onended = () => stopScreenSharing();
         
         for (const peer of peers.current.values()) {
-          await peer.replaceVideoTrack(videoTrack);
+          await peer.replaceVideoTrack(screenVideoTrack);
         }
         
         sigService.current.sendSignal({ 
@@ -221,7 +225,9 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({ session, onLeave, onStatusCha
 
         sigService.current.joinRoom(session.roomId, session.userId, session.displayName, session.isHost, handleSignaling);
         onStatusChange(CallStatus.CONNECTED);
-        setTimeout(broadcastMetadata, 1000);
+        
+        const timer = setInterval(broadcastMetadata, 5000);
+        return () => clearInterval(timer);
       } catch (e) { 
         console.error("Media error:", e);
         onStatusChange(CallStatus.DISCONNECTED); 
@@ -240,10 +246,29 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({ session, onLeave, onStatusCha
 
   return (
     <div className="w-full h-full flex flex-col items-center relative overflow-hidden">
+      {/* Presenting Banner */}
+      {isScreenSharing && (
+        <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[60] animate-in fade-in slide-in-from-top-4 duration-500">
+          <div className="bg-blue-600/90 backdrop-blur-md border border-blue-400/30 px-6 py-2 rounded-2xl shadow-2xl flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
+              <span className="text-[10px] font-black uppercase tracking-widest text-white">You are presenting to everyone</span>
+            </div>
+            <div className="h-4 w-px bg-white/20"></div>
+            <button 
+              onClick={toggleScreenShare}
+              className="bg-red-500 hover:bg-red-400 text-white text-[9px] font-black uppercase tracking-widest px-3 py-1.5 rounded-lg transition-all shadow-lg active:scale-95"
+            >
+              Stop Sharing
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className={`w-full max-w-7xl flex-grow transition-all duration-700 p-4 md:p-10 mb-24 flex gap-6 overflow-hidden h-full`}>
         <div className={`flex-grow grid gap-6 ${isInTheaterMode ? 'grid-cols-4 grid-rows-4' : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'}`}>
           
-          {/* Theater View Slot (Primary Screen Share) */}
+          {/* Theater View Slot */}
           {isInTheaterMode && (
             <div className="col-span-4 row-span-3 lg:col-span-3 lg:row-span-4 h-full">
               <VideoTile 
@@ -254,7 +279,7 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({ session, onLeave, onStatusCha
             </div>
           )}
 
-          {/* Local Camera Tile (Always visible) */}
+          {/* Local Camera Tile (Always Visible) */}
           <div className={`${isInTheaterMode ? 'col-span-1 row-span-1 h-[120px] lg:h-auto' : 'h-[300px] md:h-[350px]'}`}>
             <VideoTile 
               stream={localStream} 
@@ -265,10 +290,10 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({ session, onLeave, onStatusCha
             />
           </div>
 
-          {/* Remote Tiles (Excluding the one showing screen in theater) */}
+          {/* Remote Camera/Screen Tiles */}
           {Array.from(remoteStreams.entries()).map(([peerId, stream]) => {
             const pData = participants.find(p => p.id === peerId);
-            // Don't duplicate the stream if it's already in theater mode
+            // Hide the primary screen from the grid if it's already in theater mode as the main focus
             if (isInTheaterMode && pData?.isScreenSharing && !isScreenSharing) return null; 
             
             return (

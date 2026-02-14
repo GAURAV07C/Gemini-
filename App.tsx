@@ -3,7 +3,6 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { CallStatus, UserSession, RecentRoom } from './types';
 import SetupScreen from './components/SetupScreen';
 import MeetingRoom from './components/MeetingRoom';
-import Documentation from './components/Documentation';
 
 const SESSION_KEY = 'omni-rtc-active-session';
 const HISTORY_KEY = 'omni-rtc-room-history';
@@ -15,7 +14,6 @@ const App: React.FC = () => {
   const [recentRooms, setRecentRooms] = useState<RecentRoom[]>([]);
   const [status, setStatus] = useState<CallStatus>(CallStatus.IDLE);
   const [isRejoining, setIsRejoining] = useState(false);
-  const [showDocs, setShowDocs] = useState(false);
 
   useEffect(() => {
     const savedHistory = localStorage.getItem(HISTORY_KEY);
@@ -71,15 +69,6 @@ const App: React.FC = () => {
           </div>
           <h1 className="text-xl font-bold tracking-tight text-white">Omni<span className="text-blue-500">RTC</span></h1>
         </div>
-        <div className="flex items-center gap-4">
-          <div className="hidden md:flex items-center gap-2 px-3 py-1 bg-blue-500/10 border border-blue-500/20 rounded-full">
-            <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse"></div>
-            <span className="text-[10px] font-black text-blue-400 uppercase tracking-widest">P2P Network Active</span>
-          </div>
-          <button onClick={() => setShowDocs(!showDocs)} className="w-10 h-10 rounded-xl glass-effect flex items-center justify-center text-gray-400 hover:text-white transition-all border border-white/5">
-            <i className="fas fa-shield-halved text-sm"></i>
-          </button>
-        </div>
       </header>
 
       <main className="w-full max-w-6xl mt-20 flex flex-col items-center flex-grow">
@@ -94,8 +83,6 @@ const App: React.FC = () => {
           <MeetingRoom session={currentSession!} onLeave={handleLeave} onStatusChange={setStatus} />
         )}
       </main>
-
-      {showDocs && <Documentation onClose={() => setShowDocs(false)} />}
     </div>
   );
 };

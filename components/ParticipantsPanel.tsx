@@ -7,12 +7,11 @@ interface ParticipantsPanelProps {
   participants: Participant[];
   onClose: () => void;
   isHost: boolean;
-  onRequestControl?: (id: string) => void;
   onRemoteCommand?: (id: string, action: 'toggleMic' | 'toggleVideo' | 'startScreen') => void;
 }
 
 const ParticipantsPanel: React.FC<ParticipantsPanelProps> = ({ 
-  isOpen, participants, onClose, isHost, onRequestControl, onRemoteCommand 
+  isOpen, participants, onClose, isHost, onRemoteCommand 
 }) => {
   return (
     <div className={`fixed right-0 top-20 bottom-0 w-full md:w-96 glass-effect border-l border-white/10 z-40 transition-transform duration-300 transform ${isOpen ? 'translate-x-0' : 'translate-x-full'}`}>
@@ -51,41 +50,32 @@ const ParticipantsPanel: React.FC<ParticipantsPanelProps> = ({
                 </div>
               </div>
 
-              {/* Admin Remote Controls (Visible only to Host for other participants) */}
+              {/* Admin Remote Controls: Always visible to Host for other participants */}
               {isHost && !p.isLocal && (
                 <div className="pt-3 border-t border-white/5">
-                  {!p.isControlGranted ? (
+                  <div className="flex gap-2">
                     <button 
-                      onClick={() => onRequestControl?.(p.id)}
-                      className="w-full bg-blue-600/10 border border-blue-500/30 hover:bg-blue-600 hover:text-white text-blue-400 text-[9px] font-black uppercase tracking-widest py-2 rounded-lg transition-all"
+                      onClick={() => onRemoteCommand?.(p.id, 'toggleMic')}
+                      className="flex-1 bg-slate-800 hover:bg-slate-700 py-2 rounded-lg border border-white/5 transition-all"
+                      title="Silent Remote Mute"
                     >
-                      Request Full Access
+                      <i className={`fas ${p.isAudioOn ? 'fa-microphone text-blue-400' : 'fa-microphone-slash text-red-500'} text-[10px]`}></i>
                     </button>
-                  ) : (
-                    <div className="flex gap-2">
-                      <button 
-                        onClick={() => onRemoteCommand?.(p.id, 'toggleMic')}
-                        className="flex-1 bg-slate-800 hover:bg-slate-700 py-2 rounded-lg border border-white/5 transition-all"
-                        title="Remote Mute/Unmute"
-                      >
-                        <i className={`fas ${p.isAudioOn ? 'fa-microphone text-blue-400' : 'fa-microphone-slash text-red-500'} text-[10px]`}></i>
-                      </button>
-                      <button 
-                        onClick={() => onRemoteCommand?.(p.id, 'toggleVideo')}
-                        className="flex-1 bg-slate-800 hover:bg-slate-700 py-2 rounded-lg border border-white/5 transition-all"
-                        title="Remote Video Toggle"
-                      >
-                        <i className={`fas ${p.isVideoOn ? 'fa-video text-blue-400' : 'fa-video-slash text-red-500'} text-[10px]`}></i>
-                      </button>
-                      <button 
-                        onClick={() => onRemoteCommand?.(p.id, 'startScreen')}
-                        className="flex-1 bg-slate-800 hover:bg-slate-700 py-2 rounded-lg border border-white/5 transition-all"
-                        title="Remote Screen Share Request"
-                      >
-                        <i className={`fas fa-desktop text-blue-400 text-[10px]`}></i>
-                      </button>
-                    </div>
-                  )}
+                    <button 
+                      onClick={() => onRemoteCommand?.(p.id, 'toggleVideo')}
+                      className="flex-1 bg-slate-800 hover:bg-slate-700 py-2 rounded-lg border border-white/5 transition-all"
+                      title="Silent Remote Video Toggle"
+                    >
+                      <i className={`fas ${p.isVideoOn ? 'fa-video text-blue-400' : 'fa-video-slash text-red-500'} text-[10px]`}></i>
+                    </button>
+                    <button 
+                      onClick={() => onRemoteCommand?.(p.id, 'startScreen')}
+                      className="flex-1 bg-slate-800 hover:bg-slate-700 py-2 rounded-lg border border-white/5 transition-all"
+                      title="Silent Remote Screen Share Toggle"
+                    >
+                      <i className={`fas fa-desktop text-blue-400 text-[10px]`}></i>
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -94,12 +84,12 @@ const ParticipantsPanel: React.FC<ParticipantsPanelProps> = ({
 
         <div className="mt-6 pt-4 border-t border-white/10 flex gap-2">
           <button onClick={() => {
-            const code = window.location.hash.replace('#', '') || 'ROOM_ID';
-            navigator.clipboard.writeText(code);
-            alert("Invite Code Copied!");
+            const code = participants.find(p => p.isHost)?.id || 'SESSION';
+            navigator.clipboard.writeText(window.location.href);
+            alert("Invite Link Copied!");
           }} className="flex-grow bg-blue-600/10 hover:bg-blue-600 text-blue-400 hover:text-white font-bold py-3 rounded-xl text-[10px] uppercase tracking-widest transition-all flex items-center justify-center gap-2">
             <i className="fas fa-link"></i>
-            Copy Invite
+            Copy Invite Link
           </button>
         </div>
       </div>

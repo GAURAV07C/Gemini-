@@ -4,14 +4,13 @@ import { CallStatus, UserSession, RecentRoom } from './types';
 import SetupScreen from './components/SetupScreen';
 import MeetingRoom from './components/MeetingRoom';
 import Documentation from './components/Documentation';
-import GhostCoach from './components/GhostCoach';
 
 const SESSION_KEY = 'omni-rtc-active-session';
 const HISTORY_KEY = 'omni-rtc-room-history';
 const SESSION_TIMEOUT = 2 * 60 * 60 * 1000;
 
 const App: React.FC = () => {
-  const [view, setView] = useState<'SETUP' | 'MEETING' | 'GHOST'>('SETUP');
+  const [view, setView] = useState<'SETUP' | 'MEETING'>('SETUP');
   const [currentSession, setCurrentSession] = useState<UserSession | null>(null);
   const [recentRooms, setRecentRooms] = useState<RecentRoom[]>([]);
   const [status, setStatus] = useState<CallStatus>(CallStatus.IDLE);
@@ -19,13 +18,6 @@ const App: React.FC = () => {
   const [showDocs, setShowDocs] = useState(false);
 
   useEffect(() => {
-    // Check for Ghost Mode (Stealth Learning)
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('mode') === 'ghost') {
-      setView('GHOST');
-      return;
-    }
-
     const savedHistory = localStorage.getItem(HISTORY_KEY);
     if (savedHistory) {
       try { setRecentRooms(JSON.parse(savedHistory)); } catch (e) { localStorage.removeItem(HISTORY_KEY); }
@@ -70,10 +62,6 @@ const App: React.FC = () => {
     setStatus(CallStatus.IDLE);
   }, []);
 
-  if (view === 'GHOST') {
-    return <GhostCoach />;
-  }
-
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-4">
       <header className="fixed top-0 left-0 right-0 p-4 flex justify-between items-center z-50 glass-effect">
@@ -84,9 +72,9 @@ const App: React.FC = () => {
           <h1 className="text-xl font-bold tracking-tight text-white">Omni<span className="text-blue-500">RTC</span></h1>
         </div>
         <div className="flex items-center gap-4">
-          <div className="hidden md:flex items-center gap-2 px-3 py-1 bg-green-500/10 border border-green-500/20 rounded-full">
-            <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></div>
-            <span className="text-[10px] font-black text-green-400 uppercase tracking-widest">SFU Node Active</span>
+          <div className="hidden md:flex items-center gap-2 px-3 py-1 bg-blue-500/10 border border-blue-500/20 rounded-full">
+            <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse"></div>
+            <span className="text-[10px] font-black text-blue-400 uppercase tracking-widest">P2P Network Active</span>
           </div>
           <button onClick={() => setShowDocs(!showDocs)} className="w-10 h-10 rounded-xl glass-effect flex items-center justify-center text-gray-400 hover:text-white transition-all border border-white/5">
             <i className="fas fa-shield-halved text-sm"></i>

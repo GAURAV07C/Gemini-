@@ -1,11 +1,10 @@
 
-import { SFUSignalMessage } from '../types';
-
 export type SignalPayload = {
-  type: 'JOIN' | 'LEAVE' | 'OFFER' | 'ANSWER' | 'CANDIDATE' | 'METADATA';
+  type: 'JOIN' | 'LEAVE' | 'OFFER' | 'ANSWER' | 'CANDIDATE' | 'METADATA' | 'SCREEN_STATUS' | 'CHAT' | 'REACTION' | 'ACCESS_REQUEST' | 'ACCESS_GRANTED' | 'REMOTE_COMMAND';
   senderId: string;
   senderName: string;
   roomId: string;
+  targetId?: string;
   data?: any;
 };
 
@@ -21,21 +20,16 @@ export class SignalingService {
 
   joinRoom(roomId: string, userId: string, displayName: string, onMessage: (msg: SignalPayload) => void) {
     this.onMessageCallback = onMessage;
-    
-    // Close existing channel if any
     if (this.channel) this.channel.close();
     
-    // Create a unique channel for this room
     this.channel = new BroadcastChannel(`omni-rtc-room-${roomId}`);
-    
     this.channel.onmessage = (event) => {
       const msg = event.data as SignalPayload;
-      if (msg.senderId !== userId) { // Don't process our own messages
+      if (msg.senderId !== userId && (!msg.targetId || msg.targetId === userId)) {
         this.onMessageCallback?.(msg);
       }
     };
 
-    // Broadcast that we have joined
     this.sendSignal({
       type: 'JOIN',
       senderId: userId,

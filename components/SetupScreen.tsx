@@ -24,38 +24,16 @@ const SetupScreen: React.FC<SetupScreenProps> = ({ onJoin, recentRooms }) => {
     onJoin(room.roomId, room.displayName, room.isHost);
   };
 
-  const openGhostMode = () => {
-    const width = 400;
-    const height = 600;
-    const left = window.screen.width - width - 20;
-    const top = 100;
-    window.open(
-      `${window.location.origin}${window.location.pathname}?mode=ghost`,
-      'GhostCoach',
-      `width=${width},height=${height},left=${left},top=${top},menubar=no,toolbar=no,location=no,status=no`
-    );
-  };
-
   return (
     <div className="w-full max-w-lg flex flex-col gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-20">
       
       <div className="glass-effect p-8 rounded-[2.5rem] shadow-2xl border border-white/10 relative overflow-hidden">
-        {/* Stealth Mode Button */}
-        <button 
-          onClick={openGhostMode}
-          className="absolute top-6 right-6 w-10 h-10 rounded-full bg-slate-800/50 hover:bg-slate-700 flex items-center justify-center text-gray-600 hover:text-blue-400 transition-all border border-white/5 group"
-          title="Open AI Sidekick (Stealth Mode)"
-        >
-          <i className="fas fa-ghost text-xs"></i>
-          <span className="absolute right-12 bg-slate-900 text-[8px] font-black uppercase tracking-widest px-2 py-1 rounded border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">Open Sidekick</span>
-        </button>
-
         <div className="absolute top-0 right-0 w-32 h-32 bg-blue-600/5 blur-[50px] rounded-full pointer-events-none"></div>
         
         <div className="mb-10 text-center">
            <h2 className="text-2xl font-black italic tracking-tighter text-white uppercase leading-none mb-2">Secure Connection</h2>
            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest leading-relaxed">
-             Tip: For hidden learning, use Stealth Mode and share only the "Meeting Tab".
+             Enterprise-grade P2P video communication.
            </p>
         </div>
 

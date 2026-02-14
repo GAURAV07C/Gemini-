@@ -1,13 +1,12 @@
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { UserSession, CallStatus, Participant, AISummary, TranscriptionEntry } from '../types';
+import { UserSession, CallStatus, Participant, ChatMessage } from '../types';
 import VideoTile from './VideoTile';
 import Controls from './Controls';
 import ParticipantsPanel from './ParticipantsPanel';
-import AISidebar from './AISidebar';
-import { SFUService } from '../services/sfu';
+import ChatPanel from './ChatPanel';
+import { WebRTCService } from '../services/webrtc';
 import { SignalingService, SignalPayload } from '../services/socket';
-import { GoogleGenAI, Type } from "@google/genai";
 
 interface MeetingRoomProps {
   session: UserSession;
@@ -17,220 +16,297 @@ interface MeetingRoomProps {
 
 const MeetingRoom: React.FC<MeetingRoomProps> = ({ session, onLeave, onStatusChange }) => {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
   
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [showParticipants, setShowParticipants] = useState(false);
-  const [showAI, setShowAI] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
+  const [showChat, setShowChat] = useState(false);
+  const [accessRequest, setAccessRequest] = useState<{ fromId: string, fromName: string } | null>(null);
   
   const [participants, setParticipants] = useState<Participant[]>([]);
-  const [aiSummaries, setAiSummaries] = useState<AISummary[]>([]);
-  const [transcriptions, setTranscriptions] = useState<TranscriptionEntry[]>([]);
-  const [sfuStatus, setSfuStatus] = useState<'IDLE' | 'ROUTING' | 'OPTIMIZED'>('IDLE');
-
-  const sfuService = useRef<SFUService | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [reactions, setReactions] = useState<Map<string, string>>(new Map());
+  
+  const peers = useRef<Map<string, WebRTCService>>(new Map());
   const sigService = useRef<SignalingService>(SignalingService.getInstance());
-  const transcriptionInterval = useRef<number | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
 
-  const handleRemoteTrack = useCallback((track: MediaStreamTrack, peerId: string) => {
-    setRemoteStreams(prev => {
-      const newMap = new Map(prev);
-      const stream = new MediaStream([track]);
-      newMap.set(peerId, stream);
-      return newMap;
-    });
-  }, []);
-
-  const addParticipant = (id: string, name: string, isHost: boolean = false) => {
-    setParticipants(prev => {
-      if (prev.find(p => p.id === id)) return prev;
-      return [...prev, {
-        id,
-        name,
-        isLocal: false,
-        isVideoOn: true,
-        isAudioOn: true,
-        isHost,
-        networkQuality: 'good',
-        bitrate: '2.4 Mbps'
-      }];
-    });
-    
-    // SFU: Automatically start consuming remote stream
-    sfuService.current?.consume('p_video_remote', id);
-  };
-
-  const removeParticipant = (id: string) => {
-    setParticipants(prev => prev.filter(p => p.id !== id));
-    setRemoteStreams(prev => {
-      const newMap = new Map(prev);
-      newMap.delete(id);
-      return newMap;
-    });
-  };
-
-  const handleSignaling = (msg: SignalPayload) => {
+  const handleSignaling = async (msg: SignalPayload) => {
     switch (msg.type) {
       case 'JOIN':
-        // New peer joined, tell them who we are
-        addParticipant(msg.senderId, msg.senderName);
+        createPeer(msg.senderId, msg.senderName, true);
+        break;
+      case 'OFFER':
+        const peerOffer = createPeer(msg.senderId, msg.senderName, false);
+        const answer = await peerOffer.handleOffer(msg.data);
         sigService.current.sendSignal({
-          type: 'METADATA',
-          senderId: session.userId,
-          senderName: session.displayName,
-          roomId: session.roomId,
-          data: { isHost: session.isHost }
+          type: 'ANSWER', senderId: session.userId, senderName: session.displayName,
+          roomId: session.roomId, targetId: msg.senderId, data: answer
         });
         break;
+      case 'ANSWER':
+        peers.current.get(msg.senderId)?.handleAnswer(msg.data);
+        break;
+      case 'CANDIDATE':
+        peers.current.get(msg.senderId)?.addIceCandidate(msg.data);
+        break;
+      case 'SCREEN_STATUS':
+        setParticipants(prev => prev.map(p => 
+          p.id === msg.senderId ? { ...p, isScreenSharing: msg.data } : p
+        ));
+        break;
       case 'METADATA':
-        // Received info from existing peer
-        addParticipant(msg.senderId, msg.senderName, msg.data?.isHost);
+        setParticipants(prev => prev.map(p => 
+          p.id === msg.senderId ? { ...p, isAudioOn: msg.data.audio, isVideoOn: msg.data.video } : p
+        ));
+        break;
+      case 'ACCESS_REQUEST':
+        setAccessRequest({ fromId: msg.senderId, fromName: msg.senderName });
+        break;
+      case 'ACCESS_GRANTED':
+        setParticipants(prev => prev.map(p => 
+          p.id === msg.senderId ? { ...p, isControlGranted: true } : p
+        ));
+        break;
+      case 'REMOTE_COMMAND':
+        handleRemoteCommand(msg.data);
+        break;
+      case 'CHAT':
+        setMessages(prev => [...prev, { ...msg.data, isLocal: false }]);
+        break;
+      case 'REACTION':
+        setReactions(prev => new Map(prev).set(msg.senderId, msg.data));
         break;
       case 'LEAVE':
-        removeParticipant(msg.senderId);
+        peers.current.get(msg.senderId)?.close();
+        peers.current.delete(msg.senderId);
+        setRemoteStreams(prev => {
+          const next = new Map(prev);
+          next.delete(msg.senderId);
+          return next;
+        });
+        setParticipants(prev => prev.filter(p => p.id !== msg.senderId));
         break;
     }
   };
 
-  const generateMeetingInsights = async (textFeed: string) => {
-    try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: `Meeting transcript: "${textFeed}". Summary and 1 Action Item. JSON: {pulse, actionItem}`,
-        config: { 
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              pulse: { type: Type.STRING },
-              actionItem: { type: Type.STRING }
-            },
-            required: ["pulse", "actionItem"]
-          }
-        }
+  const handleRemoteCommand = (command: { action: 'toggleMic' | 'toggleVideo' | 'startScreen' }) => {
+    if (command.action === 'toggleMic') {
+      const nextMute = !isMuted;
+      setIsMuted(nextMute);
+      localStream?.getAudioTracks().forEach(t => t.enabled = !nextMute);
+    } else if (command.action === 'toggleVideo') {
+      const nextVideo = !isVideoOff;
+      setIsVideoOff(nextVideo);
+      localStream?.getVideoTracks().forEach(t => t.enabled = !nextVideo);
+    } else if (command.action === 'startScreen') {
+      toggleScreenShare();
+    }
+    broadcastMetadata();
+  };
+
+  const broadcastMetadata = useCallback(() => {
+    sigService.current.sendSignal({
+      type: 'METADATA',
+      senderId: session.userId,
+      senderName: session.displayName,
+      roomId: session.roomId,
+      data: { audio: !isMuted, video: !isVideoOff }
+    });
+  }, [isMuted, isVideoOff, session]);
+
+  const createPeer = (targetId: string, name: string, shouldOffer: boolean) => {
+    if (peers.current.has(targetId)) return peers.current.get(targetId)!;
+    const peer = new WebRTCService(
+      (stream) => setRemoteStreams(prev => new Map(prev).set(targetId, stream)),
+      (candidate) => sigService.current.sendSignal({
+        type: 'CANDIDATE', senderId: session.userId, senderName: session.displayName,
+        roomId: session.roomId, targetId, data: candidate
+      })
+    );
+    if (localStreamRef.current) peer.addTracks(localStreamRef.current);
+    peers.current.set(targetId, peer);
+    setParticipants(prev => [...prev.filter(p => p.id !== targetId), {
+      id: targetId, name, isLocal: false, isVideoOn: true, isAudioOn: true, isHost: false, networkQuality: 'good'
+    }]);
+    if (shouldOffer) {
+      peer.createOffer().then(offer => {
+        sigService.current.sendSignal({
+          type: 'OFFER', senderId: session.userId, senderName: session.displayName,
+          roomId: session.roomId, targetId, data: offer
+        });
       });
-      const result = JSON.parse(response.text || '{}');
-      // Fix: Added 'as const' to string literals to prevent widening to 'string' type which caused a mismatch with AISummary interface
-      setAiSummaries(prev => [
-        { timestamp: Date.now(), text: result.pulse, type: 'insight' as const },
-        { timestamp: Date.now(), text: `Action: ${result.actionItem}`, type: 'action-item' as const },
-        ...prev
-      ].slice(0, 20));
-    } catch (err) { console.error("AI Insight failed", err); }
+    }
+    return peer;
+  };
+
+  const toggleScreenShare = async () => {
+    try {
+      if (!isScreenSharing) {
+        const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+        setScreenStream(stream);
+        setIsScreenSharing(true);
+        const videoTrack = stream.getVideoTracks()[0];
+        videoTrack.onended = () => stopScreenSharing();
+        for (const peer of peers.current.values()) await peer.replaceVideoTrack(videoTrack);
+        sigService.current.sendSignal({ type: 'SCREEN_STATUS', senderId: session.userId, senderName: session.displayName, roomId: session.roomId, data: true });
+      } else {
+        await stopScreenSharing();
+      }
+    } catch (err) { console.error("Screen share failed", err); }
+  };
+
+  const stopScreenSharing = async () => {
+    screenStream?.getTracks().forEach(t => t.stop());
+    setScreenStream(null);
+    setIsScreenSharing(false);
+    if (localStreamRef.current) {
+      const cameraTrack = localStreamRef.current.getVideoTracks()[0];
+      for (const peer of peers.current.values()) await peer.replaceVideoTrack(cameraTrack);
+    }
+    sigService.current.sendSignal({ type: 'SCREEN_STATUS', senderId: session.userId, senderName: session.displayName, roomId: session.roomId, data: false });
+  };
+
+  const grantAccess = () => {
+    if (accessRequest) {
+      sigService.current.sendSignal({
+        type: 'ACCESS_GRANTED',
+        senderId: session.userId,
+        senderName: session.displayName,
+        roomId: session.roomId,
+        targetId: accessRequest.fromId
+      });
+      setAccessRequest(null);
+    }
+  };
+
+  const requestControl = (targetId: string) => {
+    sigService.current.sendSignal({
+      type: 'ACCESS_REQUEST',
+      senderId: session.userId,
+      senderName: session.displayName,
+      roomId: session.roomId,
+      targetId: targetId
+    });
+  };
+
+  const sendRemoteCommand = (targetId: string, action: 'toggleMic' | 'toggleVideo' | 'startScreen') => {
+    sigService.current.sendSignal({
+      type: 'REMOTE_COMMAND',
+      senderId: session.userId,
+      senderName: session.displayName,
+      roomId: session.roomId,
+      targetId: targetId,
+      data: { action }
+    });
+  };
+
+  // Fixed Error: Added missing sendMessage function to properly handle ChatPanel submissions
+  const sendMessage = (text: string) => {
+    const message: ChatMessage = {
+      id: `msg_${Math.random().toString(36).substr(2, 9)}`,
+      senderId: session.userId,
+      senderName: session.displayName,
+      text,
+      timestamp: Date.now(),
+      isLocal: true
+    };
+    setMessages(prev => [...prev, message]);
+    sigService.current.sendSignal({
+      type: 'CHAT',
+      senderId: session.userId,
+      senderName: session.displayName,
+      roomId: session.roomId,
+      data: message
+    });
   };
 
   useEffect(() => {
-    const initSession = async () => {
+    const init = async () => {
+      onStatusChange(CallStatus.CONNECTING);
       try {
-        onStatusChange(CallStatus.CONNECTING);
-        sfuService.current = new SFUService(handleRemoteTrack);
-        
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         setLocalStream(stream);
-
-        setSfuStatus('ROUTING');
-        await sfuService.current.initializeDevice({ codecs: ['vp8', 'opus'] });
-        await sfuService.current.createSendTransport({ id: 't_send_local' });
-        await sfuService.current.produce(stream.getVideoTracks()[0], 'video');
-        
-        setSfuStatus('OPTIMIZED');
-        onStatusChange(CallStatus.CONNECTED);
-        
-        setParticipants([{ 
-          id: session.userId, 
-          name: session.displayName, 
-          isLocal: true, 
-          isVideoOn: true, 
-          isAudioOn: true, 
-          isHost: session.isHost,
-          networkQuality: 'excellent',
-          bitrate: '4.1 Mbps'
-        }]);
-
-        // Start real signaling
+        localStreamRef.current = stream;
+        setParticipants([{ id: session.userId, name: session.displayName, isLocal: true, isVideoOn: true, isAudioOn: true, isHost: session.isHost }]);
         sigService.current.joinRoom(session.roomId, session.userId, session.displayName, handleSignaling);
-
-      } catch (err) {
-        console.error("Session Init failed:", err);
-        onStatusChange(CallStatus.DISCONNECTED);
-      }
+        onStatusChange(CallStatus.CONNECTED);
+      } catch (e) { onStatusChange(CallStatus.DISCONNECTED); }
     };
-
-    initSession();
-
-    transcriptionInterval.current = window.setInterval(() => {
-      const entry: TranscriptionEntry = {
-        speaker: "Peer",
-        text: "Discussing real-time architecture and AI integration.",
-        timestamp: Date.now()
-      };
-      setTranscriptions(prev => {
-        const updated = [...prev, entry].slice(-10);
-        if (updated.length % 3 === 0) generateMeetingInsights(updated.map(u => u.text).join(' '));
-        return updated;
-      });
-    }, 30000);
-
+    init();
     return () => {
-      if (transcriptionInterval.current) clearInterval(transcriptionInterval.current);
       sigService.current.leaveRoom(session.roomId, session.userId);
-      sfuService.current?.close();
-      if (localStream) {
-        localStream.getTracks().forEach(track => track.stop());
-      }
+      peers.current.forEach(p => p.close());
+      localStreamRef.current?.getTracks().forEach(t => t.stop());
     };
   }, []);
-
-  const copyInviteLink = () => {
-    const url = window.location.href.split('?')[0];
-    navigator.clipboard.writeText(`${url}`);
-    alert(`Room ID: ${session.roomId}\nShare this ID with a friend to join!`);
-  };
 
   return (
     <div className="w-full h-full flex flex-col items-center relative overflow-hidden">
       
-      <div className="fixed top-24 left-8 z-[60] flex flex-col gap-3">
-        {isRecording && (
-          <div className="bg-red-500/20 border border-red-500/50 px-3 py-1.5 rounded-full flex items-center gap-2 animate-pulse backdrop-blur-md">
-            <div className="w-2 h-2 bg-red-500 rounded-full shadow-[0_0_10px_rgba(239,68,68,0.5)]"></div>
-            <span className="text-red-400 text-[9px] font-black uppercase tracking-widest">Recording</span>
+      {/* Remote Access Prompt */}
+      {accessRequest && (
+        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-blue-500/30 p-8 rounded-[2rem] max-w-sm w-full text-center shadow-2xl">
+            <div className="w-16 h-16 bg-blue-600/20 rounded-full flex items-center justify-center mx-auto mb-6">
+              <i className="fas fa-shield-halved text-blue-500 text-2xl"></i>
+            </div>
+            <h3 className="text-xl font-bold text-white mb-2">Admin Control Request</h3>
+            <p className="text-gray-400 text-sm mb-8 leading-relaxed">
+              <span className="text-blue-400 font-bold">{accessRequest.fromName}</span> (Host) is requesting permission to manage your camera and microphone.
+            </p>
+            <div className="flex gap-3">
+              <button onClick={() => setAccessRequest(null)} className="flex-1 py-3 rounded-xl bg-slate-800 text-gray-400 font-bold text-xs uppercase tracking-widest hover:bg-slate-700 transition-all">Deny</button>
+              <button onClick={grantAccess} className="flex-1 py-3 rounded-xl bg-blue-600 text-white font-bold text-xs uppercase tracking-widest hover:bg-blue-500 shadow-lg shadow-blue-600/20 transition-all">Allow Access</button>
+            </div>
           </div>
-        )}
-        <div className={`px-3 py-1 rounded-full border text-[8px] font-black uppercase tracking-widest flex items-center gap-2 backdrop-blur-md transition-all duration-500 ${
-          sfuStatus === 'OPTIMIZED' ? 'bg-green-500/10 border-green-500/50 text-green-400' : 'bg-blue-500/10 border-blue-500/50 text-blue-400'
-        }`}>
-          <div className={`w-1.5 h-1.5 rounded-full ${sfuStatus === 'OPTIMIZED' ? 'bg-green-500 animate-pulse' : 'bg-blue-500 animate-spin'}`}></div>
-          SFU CORE: {sfuStatus}
+        </div>
+      )}
+
+      {/* Top Status Badges */}
+      <div className="fixed top-24 left-8 z-[60] flex flex-col gap-3 pointer-events-none">
+        <div className="px-3 py-1.5 bg-blue-600/10 border border-blue-500/30 rounded-full flex items-center gap-2 backdrop-blur-md">
+          <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse"></div>
+          <span className="text-blue-400 text-[8px] font-black uppercase tracking-widest">P2P Encrypted Active</span>
         </div>
       </div>
 
-      {/* Video Grid */}
-      <div className={`w-full max-w-7xl flex-grow transition-all duration-700 ease-in-out ${showAI ? 'pr-80 lg:pr-96' : ''} grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 p-4 md:p-10 mb-24`}>
-        <div className="h-[280px] md:h-[320px] lg:h-[350px]">
-          <VideoTile 
-            stream={localStream} label={session.displayName} isLocal isVideoOff={isVideoOff} isMuted={isMuted} isHost={session.isHost} networkQuality="excellent"
-          />
-        </div>
-
-        {Array.from(remoteStreams.entries()).map(([peerId, stream]) => (
-          <div key={peerId} className="h-[280px] md:h-[320px] lg:h-[350px]">
+      <div className={`w-full max-w-7xl flex-grow transition-all duration-700 p-4 md:p-10 mb-24 flex gap-6 overflow-hidden h-full`}>
+        <div className={`flex-grow grid gap-6 ${isScreenSharing || Array.from(participants).some(p => p.isScreenSharing) ? 'grid-cols-4 grid-rows-4' : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'}`}>
+          {/* Main Slot */}
+          <div className={`${(isScreenSharing || Array.from(participants).some(p => p.isScreenSharing)) ? 'col-span-4 row-span-3 lg:col-span-3 lg:row-span-4 h-full' : 'h-[300px] md:h-[350px]'}`}>
             <VideoTile 
-              stream={stream} label={participants.find(p => p.id === peerId)?.name || "Remote User"} networkQuality={participants.find(p => p.id === peerId)?.networkQuality || 'good'}
+              stream={isScreenSharing ? screenStream : localStream} 
+              label={isScreenSharing ? "You (Screen)" : `${session.displayName} (You)`} 
+              isLocal isVideoOff={isVideoOff} isMuted={isMuted} isScreenSharing={isScreenSharing}
+              reaction={reactions.get(session.userId)}
             />
           </div>
-        ))}
 
-        {participants.length === 1 && (
-          <div className="h-[280px] md:h-[320px] lg:h-[350px] glass-effect rounded-3xl flex flex-col items-center justify-center border-2 border-dashed border-white/5 p-6 text-center group cursor-pointer hover:border-blue-500/20 transition-all" onClick={copyInviteLink}>
-             <i className="fas fa-user-plus text-blue-500/30 text-3xl mb-4 group-hover:scale-110 transition-transform"></i>
-             <p className="text-gray-300 text-[10px] font-black uppercase tracking-[0.2em] mb-2">Waiting for others...</p>
-             <p className="text-gray-600 text-[9px] font-bold uppercase mb-4">Share Room ID: <span className="text-blue-500 font-mono">{session.roomId}</span></p>
-             <div className="bg-blue-600/10 px-5 py-2.5 rounded-xl border border-blue-500/20 text-blue-400 text-[9px] font-black uppercase tracking-tighter">Copy Link</div>
+          {/* Remote Slots */}
+          {Array.from(remoteStreams.entries()).map(([peerId, stream]) => {
+            const pData = participants.find(p => p.id === peerId);
+            return (
+              <div key={peerId} className={`${(isScreenSharing || Array.from(participants).some(p => p.isScreenSharing)) ? 'col-span-1 row-span-1 h-[120px] lg:h-auto' : 'h-[300px] md:h-[350px]'}`}>
+                <VideoTile 
+                  stream={stream} 
+                  label={pData?.name || "Participant"} 
+                  reaction={reactions.get(peerId)}
+                  isMuted={!pData?.isAudioOn}
+                  isVideoOff={!pData?.isVideoOn}
+                  isScreenSharing={pData?.isScreenSharing}
+                />
+              </div>
+            );
+          })}
+        </div>
+
+        {showChat && (
+          <div className="hidden lg:flex w-80 lg:w-96 flex-col gap-4 animate-in slide-in-from-right-4 duration-500">
+            <ChatPanel messages={messages} onSendMessage={sendMessage} onSendReaction={(e) => setReactions(prev => new Map(prev).set(session.userId, e))} />
           </div>
         )}
       </div>
@@ -238,27 +314,28 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({ session, onLeave, onStatusCha
       <div className="fixed bottom-8 left-0 right-0 flex justify-center z-50 px-4 gap-3">
         <Controls 
           isMuted={isMuted} isVideoOff={isVideoOff} isScreenSharing={isScreenSharing} isHandRaised={false}
-          showParticipants={showParticipants} onToggleMute={() => setIsMuted(!isMuted)}
-          onToggleVideo={() => setIsVideoOff(!isVideoOff)} onToggleScreenShare={() => setIsScreenSharing(!isScreenSharing)}
+          showParticipants={showParticipants} 
+          onToggleMute={() => { const next = !isMuted; setIsMuted(next); localStream?.getAudioTracks().forEach(t => t.enabled = !next); broadcastMetadata(); }}
+          onToggleVideo={() => { const next = !isVideoOff; setIsVideoOff(next); localStream?.getVideoTracks().forEach(t => t.enabled = !next); broadcastMetadata(); }} 
+          onToggleScreenShare={toggleScreenShare}
           onToggleHandRaise={() => {}}
           onToggleParticipants={() => setShowParticipants(!showParticipants)}
           onLeave={onLeave} roomId={session.roomId} participantCount={participants.length}
         />
         
-        <div className="flex gap-2">
-          <button onClick={() => setShowAI(!showAI)} className={`w-12 h-12 md:w-14 md:h-14 rounded-2xl flex items-center justify-center transition-all border ${showAI ? 'bg-purple-600 border-purple-400 shadow-[0_0_25px_rgba(168,85,247,0.4)]' : 'bg-slate-900 border-white/10 hover:bg-slate-800'}`}>
-            <i className={`fas fa-wand-magic-sparkles ${showAI ? 'text-white' : 'text-purple-400'} text-lg`}></i>
-          </button>
-          {session.isHost && (
-            <button onClick={() => setIsRecording(!isRecording)} className={`w-12 h-12 md:w-14 md:h-14 rounded-2xl flex items-center justify-center transition-all border ${isRecording ? 'bg-red-600 border-red-400 animate-pulse' : 'bg-slate-900 border-white/10 hover:bg-slate-800'}`}>
-              <i className="fas fa-record-vinyl text-white text-lg"></i>
-            </button>
-          )}
-        </div>
+        <button onClick={() => setShowChat(!showChat)} className={`w-14 h-14 rounded-2xl flex items-center justify-center transition-all border ${showChat ? 'bg-blue-600 border-blue-400 shadow-xl' : 'bg-slate-900 border-white/10'}`}>
+          <i className="fas fa-comments text-blue-400 text-lg"></i>
+        </button>
       </div>
 
-      <ParticipantsPanel isOpen={showParticipants} participants={participants} onClose={() => setShowParticipants(false)} />
-      <AISidebar isOpen={showAI} summaries={aiSummaries} onClose={() => setShowAI(false)} />
+      <ParticipantsPanel 
+        isOpen={showParticipants} 
+        participants={participants} 
+        onClose={() => setShowParticipants(false)}
+        isHost={session.isHost}
+        onRequestControl={requestControl}
+        onRemoteCommand={sendRemoteCommand}
+      />
     </div>
   );
 };

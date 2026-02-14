@@ -1,24 +1,23 @@
 
-/**
- * Senior Engineer's WebRTC Service
- * Encapsulates standard WebRTC logic, STUN config, and track management.
- */
-
 const RTC_CONFIG: RTCConfiguration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
   ],
 };
 
 export class WebRTCService {
-  private pc: RTCPeerConnection;
+  public pc: RTCPeerConnection;
   private onTrackCallback: (stream: MediaStream) => void;
+  private onIceCandidateCallback: (candidate: RTCIceCandidate) => void;
 
-  constructor(onTrack: (stream: MediaStream) => void) {
+  constructor(
+    onTrack: (stream: MediaStream) => void,
+    onIceCandidate: (candidate: RTCIceCandidate) => void
+  ) {
     this.pc = new RTCPeerConnection(RTC_CONFIG);
     this.onTrackCallback = onTrack;
+    this.onIceCandidateCallback = onIceCandidate;
     this.setupListeners();
   }
 
@@ -29,8 +28,10 @@ export class WebRTCService {
       }
     };
 
-    this.pc.oniceconnectionstatechange = () => {
-      console.log('ICE state:', this.pc.iceConnectionState);
+    this.pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        this.onIceCandidateCallback(event.candidate);
+      }
     };
   }
 
@@ -52,7 +53,11 @@ export class WebRTCService {
   }
 
   async addIceCandidate(candidate: RTCIceCandidateInit) {
-    await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
+    try {
+      await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
+    } catch (e) {
+      console.warn("ICE Candidate Error", e);
+    }
   }
 
   addTracks(stream: MediaStream) {
@@ -61,10 +66,11 @@ export class WebRTCService {
     });
   }
 
-  replaceTrack(newTrack: MediaStreamTrack) {
-    const sender = this.pc.getSenders().find((s) => s.track?.kind === newTrack.kind);
-    if (sender) {
-      sender.replaceTrack(newTrack);
+  async replaceVideoTrack(newTrack: MediaStreamTrack) {
+    const senders = this.pc.getSenders();
+    const videoSender = senders.find(s => s.track?.kind === 'video');
+    if (videoSender) {
+      await videoSender.replaceTrack(newTrack);
     }
   }
 

@@ -21,36 +21,31 @@ export interface Participant {
   isLocal: boolean;
   isVideoOn: boolean;
   isAudioOn: boolean;
+  isScreenSharing?: boolean;
   isHandRaised?: boolean;
-  isManaged?: boolean;
+  isControlGranted?: boolean; // New: If this participant has allowed the host to control them
   isHost: boolean;
   networkQuality?: 'excellent' | 'good' | 'poor';
-  bitrate?: string;
-  audioLevel?: number;
 }
 
-export interface AISummary {
-  timestamp: number;
-  text: string;
-  type: 'insight' | 'action-item';
-}
-
-export interface TranscriptionEntry {
-  speaker: string;
+export interface ChatMessage {
+  id: string;
+  senderId: string;
+  senderName: string;
   text: string;
   timestamp: number;
-}
-
-export interface SFUSignalMessage {
-  type: 'getRouterRtpCapabilities' | 'createWebRtcTransport' | 'connectWebRtcTransport' | 'produce' | 'consume' | 'newProducer';
-  data: any;
-  from: string;
-  roomId: string;
+  isLocal: boolean;
 }
 
 export interface RecentRoom {
   roomId: string;
   displayName: string;
   isHost: boolean;
+  timestamp: number;
+}
+
+// Added AISummary interface to fix import error in AISidebar.tsx
+export interface AISummary {
+  text: string;
   timestamp: number;
 }

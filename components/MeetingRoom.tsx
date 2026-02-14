@@ -36,9 +36,13 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({ session, onLeave, onStatusCha
   const handleSignaling = async (msg: SignalPayload) => {
     switch (msg.type) {
       case 'JOIN':
-        createPeer(msg.senderId, msg.senderName || 'Participant', true);
+        console.log("[Room] Join request from:", msg.senderId, msg.senderName);
+        if (msg.senderId !== session.userId) {
+          createPeer(msg.senderId, msg.senderName, true);
+        }
         break;
       case 'OFFER':
+        console.log("[Room] Received offer from:", msg.senderId);
         const peerOffer = createPeer(msg.senderId, msg.senderName, false);
         const answer = await peerOffer.handleOffer(msg.data);
         sigService.current.sendSignal({
@@ -47,6 +51,7 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({ session, onLeave, onStatusCha
         });
         break;
       case 'ANSWER':
+        console.log("[Room] Received answer from:", msg.senderId);
         peers.current.get(msg.senderId)?.handleAnswer(msg.data);
         break;
       case 'CANDIDATE':
@@ -79,6 +84,7 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({ session, onLeave, onStatusCha
         setReactions(prev => new Map(prev).set(msg.senderId, msg.data));
         break;
       case 'LEAVE':
+        console.log("[Room] Participant left:", msg.senderId);
         peers.current.get(msg.senderId)?.close();
         peers.current.delete(msg.senderId);
         setRemoteStreams(prev => {
@@ -118,14 +124,24 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({ session, onLeave, onStatusCha
   }, [isMuted, isVideoOff, session]);
 
   const createPeer = (targetId: string, name: string, shouldOffer: boolean) => {
-    if (peers.current.has(targetId)) {
-        if (localStreamRef.current) peers.current.get(targetId)!.addTracks(localStreamRef.current);
-        return peers.current.get(targetId)!;
+    let peer = peers.current.get(targetId);
+    
+    if (peer) {
+        console.log("[Room] Peer already exists for:", targetId);
+        if (localStreamRef.current) peer.addTracks(localStreamRef.current);
+        return peer;
     }
     
-    const peer = new WebRTCService(
+    console.log("[Room] Creating new peer for:", targetId, "Should offer:", shouldOffer);
+    
+    peer = new WebRTCService(
       (stream) => {
-        setRemoteStreams(prev => new Map(prev).set(targetId, stream));
+        console.log("[Room] remoteStream updated for:", targetId);
+        setRemoteStreams(prev => {
+            const next = new Map(prev);
+            next.set(targetId, stream);
+            return next;
+        });
       },
       (candidate) => sigService.current.sendSignal({
         type: 'CANDIDATE', senderId: session.userId, senderName: session.displayName,
@@ -141,7 +157,7 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({ session, onLeave, onStatusCha
     
     setParticipants(prev => {
         if (prev.find(p => p.id === targetId)) return prev;
-        return [...prev, { id: targetId, name, isLocal: false, isVideoOn: true, isAudioOn: true, isHost: false }];
+        return [...prev, { id: targetId, name: name || 'Participant', isLocal: false, isVideoOn: true, isAudioOn: true, isHost: false }];
     });
 
     if (shouldOffer) {
@@ -293,7 +309,6 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({ session, onLeave, onStatusCha
           {/* Remote Camera/Screen Tiles */}
           {Array.from(remoteStreams.entries()).map(([peerId, stream]) => {
             const pData = participants.find(p => p.id === peerId);
-            // Hide the primary screen from the grid if it's already in theater mode as the main focus
             if (isInTheaterMode && pData?.isScreenSharing && !isScreenSharing) return null; 
             
             return (

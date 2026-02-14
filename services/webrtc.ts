@@ -15,6 +15,7 @@ export class WebRTCService {
   private onTrackCallback: (stream: MediaStream) => void;
   private onIceCandidateCallback: (candidate: RTCIceCandidate) => void;
   private remoteStream: MediaStream | null = null;
+  private candidateQueue: RTCIceCandidateInit[] = [];
 
   constructor(
     onTrack: (stream: MediaStream) => void,
@@ -28,19 +29,19 @@ export class WebRTCService {
 
   private setupListeners() {
     this.pc.ontrack = (event) => {
-      console.log("[WebRTC] Track received:", event.track.kind);
-      // Modern browsers usually provide event.streams[0]
+      console.log("[WebRTC] Track received:", event.track.kind, "Streams count:", event.streams.length);
+      
       if (event.streams && event.streams[0]) {
         this.remoteStream = event.streams[0];
-        this.onTrackCallback(this.remoteStream);
       } else {
-        // Fallback for older behaviors or specific cases
         if (!this.remoteStream) {
           this.remoteStream = new MediaStream();
         }
         this.remoteStream.addTrack(event.track);
-        this.onTrackCallback(this.remoteStream);
       }
+      
+      // Ensure we notify the UI whenever a track is added or updated
+      this.onTrackCallback(this.remoteStream);
     };
 
     this.pc.onicecandidate = (event) => {
@@ -50,12 +51,24 @@ export class WebRTCService {
     };
 
     this.pc.oniceconnectionstatechange = () => {
-      console.log("[WebRTC] ICE State:", this.pc.iceConnectionState);
+      console.log("[WebRTC] ICE Connection State:", this.pc.iceConnectionState);
+      if (this.pc.iceConnectionState === 'failed') {
+        this.pc.restartIce();
+      }
     };
-    
-    this.pc.onsignalingstatechange = () => {
-      console.log("[WebRTC] Signaling State:", this.pc.signalingState);
-    };
+  }
+
+  private async processCandidateQueue() {
+    while (this.candidateQueue.length > 0) {
+      const candidate = this.candidateQueue.shift();
+      if (candidate) {
+        try {
+          await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (e) {
+          console.error("[WebRTC] Error adding buffered ICE candidate:", e);
+        }
+      }
+    }
   }
 
   async createOffer() {
@@ -77,6 +90,7 @@ export class WebRTCService {
       await this.pc.setRemoteDescription(new RTCSessionDescription(offer));
       const answer = await this.pc.createAnswer();
       await this.pc.setLocalDescription(answer);
+      await this.processCandidateQueue();
       return answer;
     } catch (e) {
       console.error("[WebRTC] Handle Offer Error:", e);
@@ -88,6 +102,7 @@ export class WebRTCService {
     try {
       if (this.pc.signalingState !== 'stable') {
         await this.pc.setRemoteDescription(new RTCSessionDescription(answer));
+        await this.processCandidateQueue();
       }
     } catch (e) {
       console.error("[WebRTC] Handle Answer Error:", e);
@@ -96,11 +111,13 @@ export class WebRTCService {
 
   async addIceCandidate(candidate: RTCIceCandidateInit) {
     try {
-      if (candidate && this.pc.remoteDescription) {
+      if (!this.pc.remoteDescription) {
+        this.candidateQueue.push(candidate);
+      } else {
         await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
       }
     } catch (e) {
-      console.debug("[WebRTC] ICE Candidate add skipped (state conflict or pending)");
+      console.debug("[WebRTC] ICE Candidate add skipped:", e);
     }
   }
 

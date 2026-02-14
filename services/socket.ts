@@ -15,8 +15,10 @@ export class SignalingService {
   private peer: Peer | null = null;
   private connections: Map<string, DataConnection> = new Map(); // Maps PeerID to Connection
   private userIdToPeerId: Map<string, string> = new Map(); // Maps UserID to PeerID
+  private userIdToName: Map<string, string> = new Map(); // Maps UserID to Name
   private onMessageCallback: ((msg: SignalPayload) => void) | null = null;
   private userId: string = '';
+  private userName: string = '';
   private roomId: string = '';
 
   static getInstance() {
@@ -27,6 +29,7 @@ export class SignalingService {
   joinRoom(roomId: string, userId: string, displayName: string, isHost: boolean, onMessage: (msg: SignalPayload) => void) {
     this.onMessageCallback = onMessage;
     this.userId = userId;
+    this.userName = displayName;
     this.roomId = roomId.toUpperCase();
 
     const peerId = isHost ? `OMNI_ROOM_${this.roomId}` : `OMNI_USER_${userId}_${Math.floor(Math.random() * 10000)}`;
@@ -42,7 +45,7 @@ export class SignalingService {
     });
 
     this.peer.on('open', (id) => {
-      console.log('[Socket] Signal Layer Ready. ID:', id);
+      console.log('[Socket] Signaling ready. My Peer ID:', id);
       if (!isHost) {
         this.connectToHost();
       }
@@ -54,33 +57,32 @@ export class SignalingService {
 
     this.peer.on('error', (err) => {
       console.error('[Socket] Signaling Error:', err.type);
-      if (err.type === 'peer-unavailable' && !isHost) {
-        setTimeout(() => this.connectToHost(), 3000);
-      }
     });
   }
 
   private connectToHost() {
     if (!this.peer || this.peer.destroyed) return;
-    const hostId = `OMNI_ROOM_${this.roomId}`;
-    const conn = this.peer.connect(hostId, {
-      metadata: { userId: this.userId, name: 'Participant' }
+    const hostPeerId = `OMNI_ROOM_${this.roomId}`;
+    const conn = this.peer.connect(hostPeerId, {
+      metadata: { userId: this.userId, name: this.userName }
     });
     this.setupConnection(conn);
   }
 
   private setupConnection(conn: DataConnection) {
     conn.on('open', () => {
-      const connMetadata = conn.metadata as { userId?: string };
-      if (connMetadata?.userId) {
-        this.userIdToPeerId.set(connMetadata.userId, conn.peer);
+      const meta = conn.metadata as { userId?: string, name?: string };
+      if (meta?.userId) {
+        this.userIdToPeerId.set(meta.userId, conn.peer);
+        if (meta.name) this.userIdToName.set(meta.userId, meta.name);
       }
       this.connections.set(conn.peer, conn);
       
-      this.sendSignal({
+      // Notify the other end about my arrival
+      conn.send({
         type: 'JOIN',
         senderId: this.userId,
-        senderName: '',
+        senderName: this.userName,
         roomId: this.roomId
       });
     });
@@ -88,21 +90,45 @@ export class SignalingService {
     conn.on('data', (data) => {
       const msg = data as SignalPayload;
       
-      // Map sender's user ID to their peer ID if we don't have it
+      // Update local maps
       if (msg.senderId) {
         this.userIdToPeerId.set(msg.senderId, conn.peer);
+        if (msg.senderName) this.userIdToName.set(msg.senderId, msg.senderName);
       }
 
-      // Relay logic: Host acts as the central router
       const isHost = this.peer?.id.startsWith('OMNI_ROOM_');
+      
       if (isHost) {
+        // If Host receives a targeted message for someone else, relay it
         if (msg.targetId && msg.targetId !== this.userId) {
           this.relayToTarget(msg);
-          // Also process for self if host is the target or if it's a broadcast
-          if (msg.targetId === this.userId) this.onMessageCallback?.(msg);
           return;
-        } else if (!msg.targetId) {
+        } 
+        
+        // If Host receives a JOIN, broadcast it to everyone else
+        if (msg.type === 'JOIN' && !msg.targetId) {
           this.broadcastToOthers(msg, conn.peer);
+          
+          // CRITICAL: Host must also tell the NEWCOMER about everyone already in the room
+          // 1. Send Host's identity to newcomer
+          conn.send({
+            type: 'JOIN',
+            senderId: this.userId,
+            senderName: this.userName,
+            roomId: this.roomId
+          });
+          
+          // 2. Send other participants' identities to newcomer
+          this.userIdToPeerId.forEach((pid, uid) => {
+            if (uid !== this.userId && uid !== msg.senderId) {
+              conn.send({
+                type: 'JOIN',
+                senderId: uid,
+                senderName: this.userIdToName.get(uid) || 'Participant',
+                roomId: this.roomId
+              });
+            }
+          });
         }
       }
 
@@ -111,9 +137,11 @@ export class SignalingService {
 
     conn.on('close', () => {
       this.connections.delete(conn.peer);
-      // Clean up mapping
       for (const [uid, pid] of this.userIdToPeerId.entries()) {
-        if (pid === conn.peer) this.userIdToPeerId.delete(uid);
+        if (pid === conn.peer) {
+            this.userIdToPeerId.delete(uid);
+            this.userIdToName.delete(uid);
+        }
       }
     });
   }
@@ -123,16 +151,12 @@ export class SignalingService {
     if (peerId) {
       const targetConn = this.connections.get(peerId);
       if (targetConn) targetConn.send(msg);
-    } else {
-      // Fallback to searching connections by partial match
-      const target = Array.from(this.connections.values()).find(c => c.peer.includes(msg.targetId!));
-      if (target) target.send(msg);
     }
   }
 
-  private broadcastToOthers(msg: SignalPayload, skipPeer: string) {
-    this.connections.forEach(conn => {
-      if (conn.peer !== skipPeer) conn.send(msg);
+  private broadcastToOthers(msg: SignalPayload, skipPeerId: string) {
+    this.connections.forEach((conn, pid) => {
+      if (pid !== skipPeerId) conn.send(msg);
     });
   }
 
@@ -146,13 +170,8 @@ export class SignalingService {
           return;
         }
       }
-      // Fallback
-      const target = Array.from(this.connections.values()).find(c => c.peer.includes(payload.targetId!));
-      if (target) {
-        target.send(payload);
-        return;
-      }
     }
+    // Default: Broadcast to all direct connections (for participants, this is just the host)
     this.connections.forEach(conn => conn.send(payload));
   }
 
@@ -160,6 +179,7 @@ export class SignalingService {
     this.connections.forEach(c => c.close());
     this.connections.clear();
     this.userIdToPeerId.clear();
+    this.userIdToName.clear();
     this.peer?.destroy();
     this.peer = null;
   }

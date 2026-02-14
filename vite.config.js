@@ -6,6 +6,10 @@ export default defineConfig({
   plugins: [react()],
   server: {
     host: '0.0.0.0',
-    allowedHosts: ['gemini-1-bz1q.onrender.com']
+    port: 5173,
+    allowedHosts: true,
+    hmr: {
+      clientPort: 443
+    }
   }
 });

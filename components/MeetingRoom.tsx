@@ -204,7 +204,6 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({ session, onLeave, onStatusCha
     });
   };
 
-  // Fixed Error: Added missing sendMessage function to properly handle ChatPanel submissions
   const sendMessage = (text: string) => {
     const message: ChatMessage = {
       id: `msg_${Math.random().toString(36).substr(2, 9)}`,
@@ -244,10 +243,12 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({ session, onLeave, onStatusCha
     };
   }, []);
 
+  const anyRemoteScreenSharing = participants.some(p => p.isScreenSharing);
+  const isInTheaterMode = isScreenSharing || anyRemoteScreenSharing;
+
   return (
     <div className="w-full h-full flex flex-col items-center relative overflow-hidden">
       
-      {/* Remote Access Prompt */}
       {accessRequest && (
         <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-blue-500/30 p-8 rounded-[2rem] max-w-sm w-full text-center shadow-2xl">
@@ -266,7 +267,6 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({ session, onLeave, onStatusCha
         </div>
       )}
 
-      {/* Top Status Badges */}
       <div className="fixed top-24 left-8 z-[60] flex flex-col gap-3 pointer-events-none">
         <div className="px-3 py-1.5 bg-blue-600/10 border border-blue-500/30 rounded-full flex items-center gap-2 backdrop-blur-md">
           <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse"></div>
@@ -275,9 +275,9 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({ session, onLeave, onStatusCha
       </div>
 
       <div className={`w-full max-w-7xl flex-grow transition-all duration-700 p-4 md:p-10 mb-24 flex gap-6 overflow-hidden h-full`}>
-        <div className={`flex-grow grid gap-6 ${isScreenSharing || Array.from(participants).some(p => p.isScreenSharing) ? 'grid-cols-4 grid-rows-4' : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'}`}>
-          {/* Main Slot */}
-          <div className={`${(isScreenSharing || Array.from(participants).some(p => p.isScreenSharing)) ? 'col-span-4 row-span-3 lg:col-span-3 lg:row-span-4 h-full' : 'h-[300px] md:h-[350px]'}`}>
+        <div className={`flex-grow grid gap-6 ${isInTheaterMode ? 'grid-cols-4 grid-rows-4' : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'}`}>
+          {/* Main Slot (PRIORITY) */}
+          <div className={`${isInTheaterMode ? 'col-span-4 row-span-3 lg:col-span-3 lg:row-span-4 h-full' : 'h-[300px] md:h-[350px]'}`}>
             <VideoTile 
               stream={isScreenSharing ? screenStream : localStream} 
               label={isScreenSharing ? "You (Screen)" : `${session.displayName} (You)`} 
@@ -286,11 +286,11 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({ session, onLeave, onStatusCha
             />
           </div>
 
-          {/* Remote Slots */}
+          {/* Other Participants Slots */}
           {Array.from(remoteStreams.entries()).map(([peerId, stream]) => {
             const pData = participants.find(p => p.id === peerId);
             return (
-              <div key={peerId} className={`${(isScreenSharing || Array.from(participants).some(p => p.isScreenSharing)) ? 'col-span-1 row-span-1 h-[120px] lg:h-auto' : 'h-[300px] md:h-[350px]'}`}>
+              <div key={peerId} className={`${isInTheaterMode ? 'col-span-1 row-span-1 h-[120px] lg:h-auto' : 'h-[300px] md:h-[350px]'}`}>
                 <VideoTile 
                   stream={stream} 
                   label={pData?.name || "Participant"} 
@@ -323,7 +323,7 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({ session, onLeave, onStatusCha
           onLeave={onLeave} roomId={session.roomId} participantCount={participants.length}
         />
         
-        <button onClick={() => setShowChat(!showChat)} className={`w-14 h-14 rounded-2xl flex items-center justify-center transition-all border ${showChat ? 'bg-blue-600 border-blue-400 shadow-xl' : 'bg-slate-900 border-white/10'}`}>
+        <button onClick={() => setShowChat(!showChat)} className={`w-14 h-14 rounded-2xl flex items-center justify-center transition-all border ${showChat ? 'bg-blue-600 border-blue-400 shadow-xl' : 'bg-slate-900 border-white/10 hover:bg-slate-800'}`}>
           <i className="fas fa-comments text-blue-400 text-lg"></i>
         </button>
       </div>

@@ -23,7 +23,7 @@ export interface Participant {
   isAudioOn: boolean;
   isScreenSharing?: boolean;
   isHandRaised?: boolean;
-  isControlGranted?: boolean; // New: If this participant has allowed the host to control them
+  isControlGranted?: boolean;
   isHost: boolean;
   networkQuality?: 'excellent' | 'good' | 'poor';
 }
@@ -41,11 +41,5 @@ export interface RecentRoom {
   roomId: string;
   displayName: string;
   isHost: boolean;
-  timestamp: number;
-}
-
-// Added AISummary interface to fix import error in AISidebar.tsx
-export interface AISummary {
-  text: string;
   timestamp: number;
 }

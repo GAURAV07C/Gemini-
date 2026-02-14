@@ -4,8 +4,7 @@ const RTC_CONFIG: RTCConfiguration = {
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
-    { urls: 'stun:stun3.l.google.com:19302' },
-    { urls: 'stun:stun4.l.google.com:19302' }
+    { urls: 'stun:stun3.l.google.com:19302' }
   ],
   iceCandidatePoolSize: 10,
 };
@@ -14,7 +13,7 @@ export class WebRTCService {
   public pc: RTCPeerConnection;
   private onTrackCallback: (stream: MediaStream) => void;
   private onIceCandidateCallback: (candidate: RTCIceCandidate) => void;
-  private remoteStream: MediaStream | null = null;
+  private remoteStream: MediaStream = new MediaStream();
   private candidateQueue: RTCIceCandidateInit[] = [];
 
   constructor(
@@ -29,18 +28,22 @@ export class WebRTCService {
 
   private setupListeners() {
     this.pc.ontrack = (event) => {
-      console.log("[WebRTC] Track received:", event.track.kind, "Streams count:", event.streams.length);
+      console.log("[WebRTC] Track detected:", event.track.kind);
       
+      // Add track to our permanent remoteStream object
       if (event.streams && event.streams[0]) {
-        this.remoteStream = event.streams[0];
+        // Many browsers provide the stream directly
+        event.streams[0].getTracks().forEach(track => {
+          if (!this.remoteStream.getTracks().includes(track)) {
+            this.remoteStream.addTrack(track);
+          }
+        });
       } else {
-        if (!this.remoteStream) {
-          this.remoteStream = new MediaStream();
-        }
+        // Fallback: add individual track
         this.remoteStream.addTrack(event.track);
       }
       
-      // Ensure we notify the UI whenever a track is added or updated
+      // Always notify the UI with our managed stream object
       this.onTrackCallback(this.remoteStream);
     };
 
@@ -51,24 +54,11 @@ export class WebRTCService {
     };
 
     this.pc.oniceconnectionstatechange = () => {
-      console.log("[WebRTC] ICE Connection State:", this.pc.iceConnectionState);
+      console.log("[WebRTC] Connection State:", this.pc.iceConnectionState);
       if (this.pc.iceConnectionState === 'failed') {
         this.pc.restartIce();
       }
     };
-  }
-
-  private async processCandidateQueue() {
-    while (this.candidateQueue.length > 0) {
-      const candidate = this.candidateQueue.shift();
-      if (candidate) {
-        try {
-          await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
-        } catch (e) {
-          console.error("[WebRTC] Error adding buffered ICE candidate:", e);
-        }
-      }
-    }
   }
 
   async createOffer() {
@@ -90,7 +80,13 @@ export class WebRTCService {
       await this.pc.setRemoteDescription(new RTCSessionDescription(offer));
       const answer = await this.pc.createAnswer();
       await this.pc.setLocalDescription(answer);
-      await this.processCandidateQueue();
+      
+      // Process any candidates that arrived early
+      while (this.candidateQueue.length > 0) {
+        const cand = this.candidateQueue.shift();
+        if (cand) await this.pc.addIceCandidate(new RTCIceCandidate(cand));
+      }
+      
       return answer;
     } catch (e) {
       console.error("[WebRTC] Handle Offer Error:", e);
@@ -102,7 +98,11 @@ export class WebRTCService {
     try {
       if (this.pc.signalingState !== 'stable') {
         await this.pc.setRemoteDescription(new RTCSessionDescription(answer));
-        await this.processCandidateQueue();
+        
+        while (this.candidateQueue.length > 0) {
+          const cand = this.candidateQueue.shift();
+          if (cand) await this.pc.addIceCandidate(new RTCIceCandidate(cand));
+        }
       }
     } catch (e) {
       console.error("[WebRTC] Handle Answer Error:", e);
@@ -117,19 +117,16 @@ export class WebRTCService {
         await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
       }
     } catch (e) {
-      console.debug("[WebRTC] ICE Candidate add skipped:", e);
+      console.debug("[WebRTC] Candidate ignored:", e);
     }
   }
 
   addTracks(stream: MediaStream) {
     if (!stream) return;
+    const currentTracks = this.pc.getSenders().map(s => s.track);
     stream.getTracks().forEach((track) => {
-      const senders = this.pc.getSenders();
-      const existingSender = senders.find(s => s.track?.kind === track.kind);
-      if (!existingSender) {
+      if (!currentTracks.includes(track)) {
         this.pc.addTrack(track, stream);
-      } else if (existingSender.track !== track) {
-        existingSender.replaceTrack(track);
       }
     });
   }

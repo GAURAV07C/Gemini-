@@ -3,7 +3,12 @@ const RTC_CONFIG: RTCConfiguration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
+    { urls: 'stun:stun.services.mozilla.com' }
   ],
+  iceCandidatePoolSize: 10,
 };
 
 export class WebRTCService {
@@ -24,6 +29,7 @@ export class WebRTCService {
   private setupListeners() {
     this.pc.ontrack = (event) => {
       if (event.streams && event.streams[0]) {
+        console.log("[WebRTC] Stream Received");
         this.onTrackCallback(event.streams[0]);
       }
     };
@@ -33,10 +39,17 @@ export class WebRTCService {
         this.onIceCandidateCallback(event.candidate);
       }
     };
+
+    this.pc.oniceconnectionstatechange = () => {
+      console.log("[WebRTC] State:", this.pc.iceConnectionState);
+    };
   }
 
   async createOffer() {
-    const offer = await this.pc.createOffer();
+    const offer = await this.pc.createOffer({
+      offerToReceiveAudio: true,
+      offerToReceiveVideo: true
+    });
     await this.pc.setLocalDescription(offer);
     return offer;
   }
@@ -49,20 +62,28 @@ export class WebRTCService {
   }
 
   async handleAnswer(answer: RTCSessionDescriptionInit) {
-    await this.pc.setRemoteDescription(new RTCSessionDescription(answer));
+    try {
+      if (this.pc.signalingState !== 'stable') {
+        await this.pc.setRemoteDescription(new RTCSessionDescription(answer));
+      }
+    } catch (e) { console.error("Answer Error:", e); }
   }
 
   async addIceCandidate(candidate: RTCIceCandidateInit) {
     try {
-      await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
-    } catch (e) {
-      console.warn("ICE Candidate Error", e);
-    }
+      if (candidate) {
+        await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
+      }
+    } catch (e) { /* Ignore candidate errors after connection */ }
   }
 
   addTracks(stream: MediaStream) {
     stream.getTracks().forEach((track) => {
-      this.pc.addTrack(track, stream);
+      // Check if track already added
+      const senders = this.pc.getSenders();
+      if (!senders.find(s => s.track === track)) {
+        this.pc.addTrack(track, stream);
+      }
     });
   }
 

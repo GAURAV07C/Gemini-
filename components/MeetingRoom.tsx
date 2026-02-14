@@ -37,7 +37,7 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({ session, onLeave, onStatusCha
   const handleSignaling = async (msg: SignalPayload) => {
     switch (msg.type) {
       case 'JOIN':
-        createPeer(msg.senderId, msg.senderName, true);
+        createPeer(msg.senderId, msg.senderName || 'New User', true);
         break;
       case 'OFFER':
         const peerOffer = createPeer(msg.senderId, msg.senderName, false);
@@ -129,9 +129,13 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({ session, onLeave, onStatusCha
     );
     if (localStreamRef.current) peer.addTracks(localStreamRef.current);
     peers.current.set(targetId, peer);
-    setParticipants(prev => [...prev.filter(p => p.id !== targetId), {
-      id: targetId, name, isLocal: false, isVideoOn: true, isAudioOn: true, isHost: false, networkQuality: 'good'
-    }]);
+    setParticipants(prev => {
+        const exists = prev.find(p => p.id === targetId);
+        if (exists) return prev;
+        return [...prev, {
+            id: targetId, name, isLocal: false, isVideoOn: true, isAudioOn: true, isHost: false, networkQuality: 'good'
+        }];
+    });
     if (shouldOffer) {
       peer.createOffer().then(offer => {
         sigService.current.sendSignal({
@@ -231,13 +235,13 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({ session, onLeave, onStatusCha
         setLocalStream(stream);
         localStreamRef.current = stream;
         setParticipants([{ id: session.userId, name: session.displayName, isLocal: true, isVideoOn: true, isAudioOn: true, isHost: session.isHost }]);
-        sigService.current.joinRoom(session.roomId, session.userId, session.displayName, handleSignaling);
+        sigService.current.joinRoom(session.roomId, session.userId, session.displayName, session.isHost, handleSignaling);
         onStatusChange(CallStatus.CONNECTED);
       } catch (e) { onStatusChange(CallStatus.DISCONNECTED); }
     };
     init();
     return () => {
-      sigService.current.leaveRoom(session.roomId, session.userId);
+      sigService.current.leaveRoom();
       peers.current.forEach(p => p.close());
       localStreamRef.current?.getTracks().forEach(t => t.stop());
     };
@@ -276,7 +280,6 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({ session, onLeave, onStatusCha
 
       <div className={`w-full max-w-7xl flex-grow transition-all duration-700 p-4 md:p-10 mb-24 flex gap-6 overflow-hidden h-full`}>
         <div className={`flex-grow grid gap-6 ${isInTheaterMode ? 'grid-cols-4 grid-rows-4' : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'}`}>
-          {/* Main Slot (PRIORITY) */}
           <div className={`${isInTheaterMode ? 'col-span-4 row-span-3 lg:col-span-3 lg:row-span-4 h-full' : 'h-[300px] md:h-[350px]'}`}>
             <VideoTile 
               stream={isScreenSharing ? screenStream : localStream} 
@@ -286,7 +289,6 @@ const MeetingRoom: React.FC<MeetingRoomProps> = ({ session, onLeave, onStatusCha
             />
           </div>
 
-          {/* Other Participants Slots */}
           {Array.from(remoteStreams.entries()).map(([peerId, stream]) => {
             const pData = participants.find(p => p.id === peerId);
             return (

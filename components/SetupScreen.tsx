@@ -15,13 +15,15 @@ const SetupScreen: React.FC<SetupScreenProps> = ({ onJoin, recentRooms }) => {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (name.trim() && (isCreating || roomId.trim())) {
-      const finalRoomId = isCreating ? Math.random().toString(36).substr(2, 6).toUpperCase() : roomId.trim();
+      const finalRoomId = isCreating 
+        ? Math.random().toString(36).substr(2, 6).toUpperCase() 
+        : roomId.trim().toUpperCase();
       onJoin(finalRoomId, name.trim(), isCreating);
     }
   };
 
   const handleRejoin = (room: RecentRoom) => {
-    onJoin(room.roomId, room.displayName, room.isHost);
+    onJoin(room.roomId.toUpperCase(), room.displayName, room.isHost);
   };
 
   return (
@@ -72,7 +74,7 @@ const SetupScreen: React.FC<SetupScreenProps> = ({ onJoin, recentRooms }) => {
                 type="text"
                 required
                 value={roomId}
-                onChange={(e) => setRoomId(e.target.value)}
+                onChange={(e) => setRoomId(e.target.value.toUpperCase())}
                 className="w-full bg-slate-900/80 border border-slate-700/50 rounded-2xl px-5 py-4 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all placeholder:text-gray-700 font-mono text-sm font-bold"
                 placeholder="XXXXXX"
               />
